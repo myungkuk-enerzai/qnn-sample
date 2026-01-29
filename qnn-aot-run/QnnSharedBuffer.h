@@ -25,14 +25,20 @@ public:
 
     static SharedBuffer &get_shared_buffer_manager();
 
+    void *get_custom_memory_base(void *buf);
+
+    void* get_unaligned_addr(void* buf);
+
     bool get_init() { return initialized_; }
     void set_init(bool init) { initialized_ = init; }
 
     void *allocmem(uint32_t bytes, uint32_t align);
     void freemem(void *buf);
-    int32_t mem2fd(void* buf);
+    int32_t mem2fd(void *buf);
 
     bool is_allocated(void *buf);
+
+    void add_custom_memory_tensor_addr(void *tensor_addr, void *custom_mem);
 
 private:
     void load();
@@ -56,4 +62,7 @@ private:
     // Maps for the custom memory
     std::unordered_map<void *, void *> restore_map_;
     std::unordered_map<void *, uint32_t> alloc_size_map_;
+
+    // For Custom Memory Base Address
+    std::unordered_map<void *, void *> tensor_addr_to_custom_mem;
 };

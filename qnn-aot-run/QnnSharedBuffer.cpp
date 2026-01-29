@@ -32,6 +32,28 @@ SharedBuffer &SharedBuffer::get_shared_buffer_manager()
     return manager;
 }
 
+void *SharedBuffer::get_custom_memory_base(void *buf)
+{
+    auto iter = tensor_addr_to_custom_mem.find(buf);
+    if (iter == tensor_addr_to_custom_mem.end())
+    {
+        return nullptr;
+    }
+
+    return iter->second;
+}
+
+void *SharedBuffer::get_unaligned_addr(void *buf)
+{
+    auto iter = restore_map_.find(buf);
+    if (iter == restore_map_.end())
+    {
+        return nullptr;
+    }
+
+    return iter->second;
+}
+
 void *SharedBuffer::allocmem(uint32_t bytes, uint32_t align)
 {
     if (!initialized_)
@@ -80,6 +102,11 @@ int32_t SharedBuffer::mem2fd(void *buf)
 bool SharedBuffer::is_allocated(void *buf)
 {
     return restore_map_.count(buf) != 0U;
+}
+
+void SharedBuffer::add_custom_memory_tensor_addr(void *tensor_addr, void *custom_mem)
+{
+    tensor_addr_to_custom_mem.insert({tensor_addr, custom_mem});
 }
 
 void SharedBuffer::load()

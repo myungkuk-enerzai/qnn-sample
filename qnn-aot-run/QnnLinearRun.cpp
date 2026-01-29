@@ -16,7 +16,8 @@ uint32_t output_shape = 4096 * 8;
 uint32_t num_iter = 10;
 
 static constexpr uint32_t DEFAULT_ALIGNMENT = 8;
-static constexpr bool ENABLE_SHARED_BUFFER = false;
+static constexpr bool USE_SHARED_BUFFER = true;
+static constexpr bool USE_CUSTOM_BUFFER = false;
 
 std::string backend_lib_file = "libQnnHtp.so";
 std::string system_lib_file = "libQnnSystem.so";
@@ -72,6 +73,50 @@ void export_profile_data(const std::string &OutputPath,
 }
 
 template <typename INFO>
+void register_custom(INFO &info, Qnn_Tensor_t &out_tessor,
+                     const QnnInterface_t *interface,
+                     Qnn_ContextHandle_t context, void *data, void *base)
+{
+    // TODO
+}
+
+template <typename T>
+void register_ion(T &tensor, Qnn_Tensor_t &out_tessor,
+                  const QnnInterface_t *interface,
+                  Qnn_ContextHandle_t context, void *data)
+{
+    Qnn_ErrorHandle_t err = QNN_SUCCESS;
+    int32_t memfd = SharedBuffer::get_shared_buffer_manager().mem2fd(data);
+    Qnn_MemDescriptor_t descriptor =
+        {
+            {tensor.v2.rank, tensor.v2.dimensions, nullptr},
+            tensor.v2.dataType,
+            QNN_MEM_TYPE_ION,
+            {{memfd}}};
+
+    Qnn_MemHandle_t mem_handle = nullptr;
+    err = interface->QNN_INTERFACE_VER_NAME.memRegister(
+        context,
+        &descriptor,
+        1,
+        &mem_handle);
+
+    if (err != QNN_SUCCESS)
+    {
+        printf("memRegister failed: %lu\n", err);
+        return;
+    }
+
+    printf("Tensor rank: %u\n", tensor.v2.rank);
+    printf("Tensor dimensions: %u x %u\n", tensor.v2.dimensions[0], tensor.v2.dimensions[1]);
+    printf("Registered input tensor memhandle: %p\n", mem_handle);
+
+    out_tessor = tensor;
+    out_tessor.v2.memHandle = mem_handle;
+    out_tessor.v2.memType = QNN_TENSORMEMTYPE_MEMHANDLE;
+}
+
+template <typename INFO>
 void prepare_tensors(INFO &info, std::vector<Qnn_Tensor_t> &out_input_tensors, std::vector<Qnn_Tensor_t> &out_output_tensors,
                      const QnnInterface_t *interface,
                      Qnn_ContextHandle_t context,
@@ -85,79 +130,33 @@ void prepare_tensors(INFO &info, std::vector<Qnn_Tensor_t> &out_input_tensors, s
 
     for (uint32_t i = 0; i < info.numGraphInputs; i++)
     {
-        uint16_t *input_data_fp16 = reinterpret_cast<uint16_t *>(input_data) + i;
-        if (ENABLE_SHARED_BUFFER)
+        uint16_t *data_ptr = reinterpret_cast<uint16_t *>(input_data) + i;
+
+        if (USE_SHARED_BUFFER)
         {
-            int32_t memfd = SharedBuffer::get_shared_buffer_manager().mem2fd(input_data_fp16);
-            Qnn_MemDescriptor_t descriptor =
-                {
-                    {info.graphInputs[i].v2.rank, info.graphInputs[i].v2.dimensions, nullptr},
-                    info.graphInputs[i].v2.dataType,
-                    QNN_MEM_TYPE_ION,
-                    {{memfd}}};
-
-            Qnn_MemHandle_t mem_handle = nullptr;
-            err = interface->QNN_INTERFACE_VER_NAME.memRegister(
-                context,
-                &descriptor,
-                1,
-                &mem_handle);
-
-            if (err != QNN_SUCCESS)
-            {
-                printf("memRegister failed: %lu\n", err);
-                return;
-            }
-
-            printf("Tensor rank: %u\n", info.graphInputs[i].v2.rank);
-            printf("Tensor dimensions: %u x %u\n", info.graphInputs[i].v2.dimensions[0], info.graphInputs[i].v2.dimensions[1]);
-            printf("Registered input tensor memhandle: %p\n", mem_handle);
-
-            out_input_tensors[i] = info.graphInputs[i];
-            out_input_tensors[i].v2.memHandle = mem_handle;
-            out_input_tensors[i].v2.memType = QNN_TENSORMEMTYPE_MEMHANDLE;
+            void *custom_mem_base = SharedBuffer::get_shared_buffer_manager().get_custom_memory_base(data_ptr);
+            if (custom_mem_base && USE_CUSTOM_BUFFER)
+                register_custom(info.graphInputs[i], out_input_tensors[i], interface, context, custom_mem_base);
+            else
+                register_ion(info.graphInputs[i], out_input_tensors[i], interface, context, data_ptr);
         }
         else
         {
             out_input_tensors[i] = info.graphInputs[i];
             out_input_tensors[i].v2.memType = QNN_TENSORMEMTYPE_RAW;
-            out_input_tensors[i].v2.clientBuf.data = input_data_fp16;
+            out_input_tensors[i].v2.clientBuf.data = reinterpret_cast<uint16_t *>(input_data) + i;
             out_input_tensors[i].v2.clientBuf.dataSize = batch_size * input_shape * sizeof(uint16_t);
         }
     }
 
     for (uint32_t i = 0; i < info.numGraphOutputs; i++)
     {
-        if (ENABLE_SHARED_BUFFER)
+        if (USE_SHARED_BUFFER)
         {
-            uint16_t *output_data_fp16 = reinterpret_cast<uint16_t *>(output_data) + i;
-            int32_t memfd = SharedBuffer::get_shared_buffer_manager().mem2fd(output_data_fp16);
-            Qnn_MemDescriptor_t descriptor =
-                {
-                    {info.graphOutputs[i].v2.rank, info.graphOutputs[i].v2.dimensions, nullptr},
-                    info.graphOutputs[i].v2.dataType,
-                    QNN_MEM_TYPE_ION,
-                    {{memfd}}};
-            Qnn_MemHandle_t mem_handle = nullptr;
-            err = interface->QNN_INTERFACE_VER_NAME.memRegister(
-                context,
-                &descriptor,
-                1,
-                &mem_handle);
-
-            if (err != QNN_SUCCESS)
-            {
-                printf("memRegister failed: %lu\n", err);
-                return;
-            }
-
-            printf("Tensor rank: %u\n", info.graphOutputs[i].v2.rank);
-            printf("Tensor dimensions: %u x %u\n", info.graphOutputs[i].v2.dimensions[0], info.graphOutputs[i].v2.dimensions[1]);
-            printf("Registered input tensor memhandle: %p\n", mem_handle);
-
-            out_output_tensors[i] = info.graphOutputs[i];
-            out_output_tensors[i].v2.memHandle = mem_handle;
-            out_output_tensors[i].v2.memType = QNN_TENSORMEMTYPE_MEMHANDLE;
+            if (USE_CUSTOM_BUFFER)
+                register_custom(info.graphOutputs[i], out_output_tensors[i], interface, context, reinterpret_cast<uint16_t *>(output_data) + i);
+            else
+                register_ion(info.graphOutputs[i], out_output_tensors[i], interface, context, reinterpret_cast<uint16_t *>(output_data) + i);
         }
         else
         {
@@ -248,7 +247,7 @@ int main(int argc, char **argv)
         void *input_data = nullptr;
         void *output_data = nullptr;
 
-        if (ENABLE_SHARED_BUFFER)
+        if (USE_SHARED_BUFFER)
         {
             input_data = SharedBuffer::get_shared_buffer_manager().allocmem(batch_size * input_shape * sizeof(uint16_t), DEFAULT_ALIGNMENT);
             output_data = SharedBuffer::get_shared_buffer_manager().allocmem(batch_size * output_shape * sizeof(uint16_t), DEFAULT_ALIGNMENT);
@@ -350,7 +349,7 @@ int main(int argc, char **argv)
             printf("  [%u]: %f\n", i, fp16_to_fp32(output_data_uint16[i]));
         }
 
-        if (ENABLE_SHARED_BUFFER)
+        if (USE_SHARED_BUFFER)
         {
             SharedBuffer::get_shared_buffer_manager().freemem(input_data);
             SharedBuffer::get_shared_buffer_manager().freemem(output_data);
